@@ -141,6 +141,8 @@ class Manager(object):
         command, config_json = parts
         try:
             config = shell.parse_json_in_str(config_json)
+            if 'method' in config:
+                config['method'] = common.to_str(config['method'])
             return command, config
         except Exception as e:
             logging.error(e)
@@ -173,18 +175,20 @@ class Manager(object):
         self._statistics.clear()
 
     def _send_control_data(self, data):
-        if self._control_client_addr:
-            try:
-                self._control_socket.sendto(data, self._control_client_addr)
-            except (socket.error, OSError, IOError) as e:
-                error_no = eventloop.errno_from_exception(e)
-                if error_no in (errno.EAGAIN, errno.EINPROGRESS,
-                                errno.EWOULDBLOCK):
-                    return
-                else:
-                    shell.print_exception(e)
-                    if self._config['verbose']:
-                        traceback.print_exc()
+        if not self._control_client_addr:
+            return
+
+        try:
+            self._control_socket.sendto(data, self._control_client_addr)
+        except (socket.error, OSError, IOError) as e:
+            error_no = eventloop.errno_from_exception(e)
+            if error_no in (errno.EAGAIN, errno.EINPROGRESS,
+                            errno.EWOULDBLOCK):
+                return
+            else:
+                shell.print_exception(e)
+                if self._config['verbose']:
+                    traceback.print_exc()
 
     def run(self):
         self._loop.run()

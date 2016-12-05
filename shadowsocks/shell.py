@@ -23,6 +23,10 @@ import json
 import sys
 import getopt
 import logging
+import traceback
+
+from functools import wraps
+
 from shadowsocks.common import to_bytes, to_str, IPNetwork
 from shadowsocks import encrypt
 
@@ -53,6 +57,49 @@ def print_exception(e):
         traceback.print_exc()
 
 
+def exception_handle(self_, err_msg=None, exit_code=None,
+                     destroy=False, conn_err=False):
+    # self_: if function passes self as first arg
+
+    def process_exception(e, self=None):
+        print_exception(e)
+        if err_msg:
+            logging.error(err_msg)
+        if exit_code:
+            sys.exit(1)
+
+        if not self_:
+            return
+
+        if conn_err:
+            addr, port = self._client_address[0], self._client_address[1]
+            logging.error('%s when handling connection from %s:%d' %
+                          (e, addr, port))
+        if self._config['verbose']:
+            traceback.print_exc()
+        if destroy:
+            self.destroy()
+
+    def decorator(func):
+        if self_:
+            @wraps(func)
+            def wrapper(self, *args, **kwargs):
+                try:
+                    func(self, *args, **kwargs)
+                except Exception as e:
+                    process_exception(e, self)
+        else:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                try:
+                    func(*args, **kwargs)
+                except Exception as e:
+                    process_exception(e)
+
+        return wrapper
+    return decorator
+
+
 def print_shadowsocks():
     version = ''
     try:
@@ -77,6 +124,22 @@ def check_config(config, is_local):
     if config.get('daemon', None) == 'stop':
         # no need to specify configuration for daemon stop
         return
+
+    if is_local:
+        if config.get('server', None) is None:
+            logging.error('server addr not specified')
+            print_local_help()
+            sys.exit(2)
+        else:
+            config['server'] = to_str(config['server'])
+    else:
+        config['server'] = to_str(config.get('server', '0.0.0.0'))
+        try:
+            config['forbidden_ip'] = \
+                IPNetwork(config.get('forbidden_ip', '127.0.0.0/8,::1/128'))
+        except Exception as e:
+            logging.error(e)
+            sys.exit(2)
 
     if is_local and not config.get('password', None):
         logging.error('password not specified')
@@ -233,21 +296,6 @@ def get_config(is_local):
     config['local_port'] = config.get('local_port', 1080)
     config['one_time_auth'] = config.get('one_time_auth', False)
     config['prefer_ipv6'] = config.get('prefer_ipv6', False)
-    if is_local:
-        if config.get('server', None) is None:
-            logging.error('server addr not specified')
-            print_local_help()
-            sys.exit(2)
-        else:
-            config['server'] = to_str(config['server'])
-    else:
-        config['server'] = to_str(config.get('server', '0.0.0.0'))
-        try:
-            config['forbidden_ip'] = \
-                IPNetwork(config.get('forbidden_ip', '127.0.0.0/8,::1/128'))
-        except Exception as e:
-            logging.error(e)
-            sys.exit(2)
     config['server_port'] = config.get('server_port', 8388)
 
     logging.getLogger('').handlers = []
@@ -294,6 +342,7 @@ Proxy options:
   -k PASSWORD            password
   -m METHOD              encryption method, default: aes-256-cfb
   -t TIMEOUT             timeout in seconds, default: 300
+  -a ONE_TIME_AUTH       one time auth
   --fast-open            use TCP_FASTOPEN, requires Linux 3.7+
 
 General options:
